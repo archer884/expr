@@ -68,7 +68,7 @@ pub(crate) fn parse_expression(expr: &str) -> Result<ExpressionPair> {
     let left = parts.next().ok_or_else(|| Error::bad_expression(expr))?;
     let right = parts.next();
 
-    // Expressions must only a maximum of two parts at this level.
+    // Expressions must only contain a maximum of two parts at this level.
     if parts.next().is_some() {
         return Err(Error::bad_expression(expr));
     }
@@ -126,6 +126,5 @@ mod tests {
     #[test]
     fn it_works() {
         dbg!(super::parse("a20+10+s2d10r2!7-3").unwrap());
-        todo!()
     }
 }
