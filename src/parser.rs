@@ -64,7 +64,9 @@ pub(crate) fn parse(s: &str) -> Result<Vec<Expression>> {
 
 /// Parses a base dice expression, e.g. 2d6
 pub(crate) fn parse_expression(expr: &str) -> Result<ExpressionPair> {
-    let mut parts = dbg!(expr).split(|c| c == 'd' || c == 'D');
+    let mut parts = expr
+        .trim_start_matches(|x| x == 'd' || x == 'D')
+        .split(|c| c == 'd' || c == 'D');
     let left = parts.next().ok_or_else(|| Error::bad_expression(expr))?;
     let right = parts.next();
 

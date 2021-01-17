@@ -1,7 +1,7 @@
 mod error;
 mod parser;
 
-use std::{cmp, str::FromStr};
+use std::{cmp, slice, str::FromStr};
 
 use parser::State;
 
@@ -51,6 +51,16 @@ impl FromStr for CompoundExpression {
 pub struct RealizedCompoundExpression {
     sum: i32,
     realized_expressions: Vec<RealizedExpression>,
+}
+
+impl RealizedCompoundExpression {
+    pub fn sum(&self) -> i32 {
+        self.sum
+    }
+
+    pub fn results(&self) -> slice::Iter<RealizedExpression> {
+        self.realized_expressions.iter()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -184,9 +194,9 @@ impl Expression {
 
 #[derive(Clone, Debug)]
 pub struct RealizedExpression {
-    min: i32,
-    max: i32,
-    realized: i32,
+    pub min: i32,
+    pub max: i32,
+    pub realized: i32,
 }
 
 impl RealizedExpression {
@@ -272,5 +282,10 @@ mod tests {
         let expression: CompoundExpression = dbg!("2d6!5".parse().unwrap());
         let results = dbg!(expression.realize(&mut provider));
         assert_eq!(17, results.sum);
+    }
+
+    #[test]
+    fn can_parse_simple_dice_expr() {
+        let _: CompoundExpression = dbg!("d6".parse().unwrap());
     }
 }
