@@ -18,7 +18,7 @@ pub struct ExpressionParser {
 impl ExpressionParser {
     pub fn new() -> Self {
         ExpressionParser {
-            bounded_expression: Regex::new(r#"^([Aa]|[Ss])?(\d+d)?(\d+)"#).unwrap(),
+            bounded_expression: Regex::new(r#"^([Aa]|[Ss])?(\d+[Dd])?[Dd]?(\d+)"#).unwrap(),
             modifier_expression: Regex::new(r#"([+-]\d+)"#).unwrap(),
             reroll_expression: Regex::new(r#"r(\d+)?"#).unwrap(),
             explode_expression: Regex::new(r#"!(\d+)?"#).unwrap(),
@@ -208,6 +208,10 @@ impl RealizedExpression {
         result + self.modifier
     }
 
+    pub fn modifier(&self) -> i32 {
+        self.modifier
+    }
+
     pub fn results(&'_ self) -> impl Iterator<Item = (Highlight, i32)> + '_ {
         self.results.iter().map(move |&x| match x {
             1 => (Highlight::Low, 1),
@@ -249,8 +253,11 @@ mod tests {
 
     #[test]
     fn leading_bounded_expression() {
-        let expression = parse("20");
-        assert_eq!(count_max(1, 20), expression);
+        let a = parse("20");
+        let b = parse("d20");
+        let expected = count_max(1, 20);
+        assert_eq!(a, expected);
+        assert_eq!(b, expected);
     }
 
     #[test]
@@ -339,6 +346,7 @@ mod tests {
     fn bounded_expression_with_advantage() {
         let a = parse("a20");
         let b = parse("a1d20");
+        let c = parse("ad20");
 
         let expected = Expression {
             count: 1,
@@ -349,6 +357,7 @@ mod tests {
 
         assert_eq!(a, expected);
         assert_eq!(b, expected);
+        assert_eq!(c, expected);
     }
 
     #[test]
