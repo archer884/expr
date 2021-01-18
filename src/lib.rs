@@ -1,7 +1,10 @@
+use std::cmp;
+
 mod error;
 
 use error::Error;
 use regex::Regex;
+use smallvec::SmallVec;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -28,13 +31,11 @@ impl ExpressionParser {
         match self.bounded_expression.captures(expr) {
             Some(captures) => {
                 if let Some(group) = captures.get(1) {
-                    expression.advantage = Some(
-                        if group.as_str().as_bytes()[0].to_ascii_lowercase() == b'a' {
-                            Advantage::Advantage
-                        } else {
-                            Advantage::Disadvantage
-                        },
-                    );
+                    expression.advantage = match group.as_str() {
+                        "A" | "a" => Advantage::Advantage,
+                        "S" | "s" => Advantage::Disadvantage,
+                        _ => unreachable!("Regex can't match this"),
+                    };
                 }
 
                 if let Some(group) = captures.get(2) {
@@ -71,27 +72,157 @@ impl ExpressionParser {
     }
 }
 
+impl Default for ExpressionParser {
+    fn default() -> Self {
+        ExpressionParser::new()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Expression {
     count: i32,
     max: i32,
     modifier: i32,
-    advantage: Option<Advantage>,
+    advantage: Advantage,
     reroll: Option<Reroll>,
     explode: Option<Explode>,
+}
+
+impl Expression {
+    pub fn realize(&self, source: &mut impl RollSource) -> RealizedExpression {
+        let mut advantage = Some(self.advantage);
+        let rolls = (0..self.count).map(move |_| Roll {
+            advantage: advantage.take().unwrap_or_default(),
+            expression: self,
+        });
+
+        RealizedExpression {
+            results: rolls.map(|mut x| x.realize(source)).flatten().collect(),
+            max: self.max,
+            modifier: self.modifier,
+        }
+    }
+}
+
+struct Roll<'a> {
+    advantage: Advantage,
+    expression: &'a Expression,
+}
+
+impl Roll<'_> {
+    fn realize(&mut self, source: &mut impl RollSource) -> SmallVec<[i32; 4]> {
+        let mut result = SmallVec::new();
+        let mut value = match self.advantage {
+            Advantage::Advantage => cmp::max(
+                source.next(self.expression.max),
+                source.next(self.expression.max),
+            ),
+            Advantage::Disadvantage => cmp::min(
+                source.next(self.expression.max),
+                source.next(self.expression.max),
+            ),
+            Advantage::Normal => source.next(self.expression.max),
+        };
+
+        loop {
+            // If the value is small enough to re-roll, do not store it.
+            if self.reroll(value) {
+                value = source.next(self.expression.max);
+                continue;
+            }
+
+            // Store value.
+            result.push(value);
+
+            // If the value is large enough to explode, roll another and continue.
+            if self.explode(value) {
+                value = source.next(self.expression.max);
+                continue;
+            }
+
+            // Return results.
+            break result;
+        }
+    }
+
+    fn reroll(&self, value: i32) -> bool {
+        self.expression
+            .reroll
+            .map(|x| x.should_reroll(value))
+            .unwrap_or_default()
+    }
+
+    fn explode(&self, value: i32) -> bool {
+        self.expression
+            .explode
+            .map(|x| x.should_explode(value))
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Advantage {
     Advantage,
     Disadvantage,
+    Normal,
+}
+
+impl Default for Advantage {
+    fn default() -> Self {
+        Advantage::Normal
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Reroll(i32);
 
+impl Reroll {
+    fn should_reroll(self, value: i32) -> bool {
+        self.0 >= value
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Explode(i32);
+
+impl Explode {
+    fn should_explode(self, value: i32) -> bool {
+        value >= self.0
+    }
+}
+
+pub trait RollSource {
+    fn next(&mut self, max: i32) -> i32;
+}
+
+#[derive(Clone, Debug)]
+pub struct RealizedExpression {
+    results: SmallVec<[i32; 4]>,
+    max: i32,
+    modifier: i32,
+}
+
+impl RealizedExpression {
+    pub fn sum(&self) -> i32 {
+        let result: i32 = self.results.iter().sum();
+        result + self.modifier
+    }
+
+    pub fn results(&'_ self) -> impl Iterator<Item = (Highlight, i32)> + '_ {
+        self.results.iter().map(move |&x| match x {
+            1 => (Highlight::Low, 1),
+            x if x == self.max => (Highlight::High, x),
+            x => (Highlight::Normal, x),
+        })
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Highlight {
+    High,
+    Low,
+    Normal,
+}
 
 fn parse_threshold_token(expr: &str, pattern: &Regex, default: i32) -> Result<Option<i32>> {
     match pattern.captures(expr) {
@@ -108,7 +239,7 @@ fn parse_threshold_token(expr: &str, pattern: &Regex, default: i32) -> Result<Op
 
 #[cfg(test)]
 mod tests {
-    use crate::{Advantage, Explode, Expression, ExpressionParser, Reroll};
+    use crate::{Advantage, Explode, Expression, ExpressionParser, Reroll, RollSource};
 
     #[test]
     fn bounded_expression() {
@@ -190,7 +321,8 @@ mod tests {
 
     #[test]
     fn bounded_expression_with_reroll_and_explode_non_default_thresholds() {
-        let actual = parse("2d6r2!5");
+        let a = parse("2d6r2!5");
+        let b = parse("2d6!5r2");
         let expected = Expression {
             count: 2,
             max: 6,
@@ -199,7 +331,8 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(actual, expected);
+        assert_eq!(a, expected);
+        assert_eq!(b, expected);
     }
 
     #[test]
@@ -210,7 +343,7 @@ mod tests {
         let expected = Expression {
             count: 1,
             max: 20,
-            advantage: Some(Advantage::Advantage),
+            advantage: Advantage::Advantage,
             ..Default::default()
         };
 
@@ -226,7 +359,7 @@ mod tests {
         let expected = Expression {
             count: 1,
             max: 20,
-            advantage: Some(Advantage::Disadvantage),
+            advantage: Advantage::Disadvantage,
             ..Default::default()
         };
 
@@ -234,6 +367,68 @@ mod tests {
         assert_eq!(b, expected);
     }
 
+    #[test]
+    fn realize_bounded_expression() {
+        let mut source = MockSource::new(vec![2,3]);
+        let expression = parse("2d6");
+        assert_eq!(5, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_advantage() {
+        let mut source = MockSource::new(vec![2, 20]);
+        let expression = parse("a20");
+        assert_eq!(20, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_disadvantage() {
+        let mut source = MockSource::new(vec![20, 2]);
+        let expression = parse("s20");
+        assert_eq!(2, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_reroll() {
+        let mut source = MockSource::new(vec![2, 3, 5]);
+        let expression = parse("2d6r2");
+        assert_eq!(8, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_explode() {
+        let mut source = MockSource::new(vec![3, 5, 2]);
+        let expression = parse("2d6!5");
+        assert_eq!(10, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_reroll_and_explode() {
+        let mut source = MockSource::new(vec![1, 2, 5, 6, 3, 4]);
+        let expression = parse("2d6r2!5");
+        assert_eq!(18, expression.realize(&mut source).sum());
+    }
+
+    // I honestly don't know what the desired result for these two tests is.
+    // Let these serve to exemplify the behavior of the library rather than to
+    // define correct behavior.
+    // - realize_advantage_reroll_and_explode
+    // - realize_disadvantage_reroll_and_explode
+
+    #[test]
+    fn realize_advantage_reroll_and_explode() {
+        let mut source = MockSource::new(vec![1, 5, 3, 2]);
+        let expression = parse("a2d6r!5");
+        assert_eq!(10, expression.realize(&mut source).sum());
+    }
+
+    #[test]
+    fn realize_disadvantage_reroll_and_explode() {
+        let mut source = MockSource::new(vec![1, 5, 3, 2]);
+        let expression = parse("a2d6r!5");
+        assert_eq!(10, expression.realize(&mut source).sum());
+    }
+    
     fn parse(s: &str) -> Expression {
         ExpressionParser::new().parse(s).unwrap()
     }
@@ -243,6 +438,22 @@ mod tests {
             count,
             max,
             ..Default::default()
+        }
+    }
+
+    struct MockSource<T> {
+        source: T
+    }
+
+    impl<T> MockSource<T> {
+        fn new(source: impl IntoIterator<IntoIter = T>) -> Self {
+            Self { source: source.into_iter() }
+        }
+    }
+
+    impl<T: Iterator<Item = i32>> RollSource for MockSource<T> {
+        fn next(&mut self, _max: i32) -> i32 {
+            self.source.next().unwrap()
         }
     }
 }
