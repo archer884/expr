@@ -2,7 +2,7 @@ use std::cmp;
 
 mod error;
 
-use error::Error;
+pub use error::Error;
 use regex::Regex;
 use smallvec::SmallVec;
 
@@ -139,7 +139,6 @@ pub trait Realizer {
     fn realize(&mut self, expression: &Expression) -> RealizedExpression {
         let mut results = SmallVec::new();
         let mut advantage = Some(expression.advantage);
-        
         
         for _ in 0..expression.count {
             let mut value = match advantage.take().unwrap_or_default() {
