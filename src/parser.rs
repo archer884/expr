@@ -1,7 +1,7 @@
 use crate::{Error, Expression, ExpressionPair, Result};
 
 pub(crate) fn parse(s: &str) -> Result<Vec<Expression>> {
-    let mut state = State::Bounded { idx: 0 };
+    let mut state = State::Base { idx: 0 };
     let mut compound_expression = Vec::new();
     let mut expression = Expression::default();
 
@@ -36,7 +36,13 @@ pub(crate) fn parse(s: &str) -> Result<Vec<Expression>> {
             }
 
             b'd' => {
-                state = state.into_bounded();
+                // From the base state, this 
+                if state.is_base() {
+                    state = state.into_bounded();
+                } else {
+                    expression.apply_state(s, &state, current_idx)?;
+                    state = State::Bounded { idx: current_idx + 1 };
+                }
             }
 
             b'r' => {
@@ -115,6 +121,13 @@ impl State {
     fn into_bounded(self) -> Self {
         State::Bounded { idx: self.idx() }
     }
+
+    fn is_base(&self) -> bool {
+        match self {
+            State::Base { .. } => true,
+            _ => false,
+        }
+    }
 }
 
 impl Default for State {
@@ -127,6 +140,6 @@ impl Default for State {
 mod tests {
     #[test]
     fn it_works() {
-        dbg!(super::parse("a20+10+s2d10r2!7-3").unwrap());
+        dbg!(super::parse("ad20+10+s2d10r2!7-3").unwrap());
     }
 }

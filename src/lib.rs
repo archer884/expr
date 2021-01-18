@@ -228,6 +228,8 @@ impl Default for Value {
 
 #[cfg(test)]
 mod tests {
+    use std::iter;
+
     use crate::{CompoundExpression, RngProvider};
 
     struct MockRngProvider<I> {
@@ -287,5 +289,13 @@ mod tests {
     #[test]
     fn can_parse_simple_dice_expr() {
         let _: CompoundExpression = dbg!("d6".parse().unwrap());
+    }
+
+    #[test]
+    fn can_parse_bang_or_reroll_then_dice() {
+        let mut provider = MockRngProvider::new(iter::repeat(5));
+        let expression: CompoundExpression = dbg!("1d6rd10".parse().unwrap());
+        let results = dbg!(expression.realize(&mut provider));
+        assert_eq!(10, results.sum);
     }
 }
