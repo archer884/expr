@@ -1,301 +1,248 @@
 mod error;
-mod parser;
 
-use std::{cmp, slice, str::FromStr};
+use error::Error;
+use regex::Regex;
 
-use parser::State;
+type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub use error::Error;
-
-pub type Result<T, E = error::Error> = std::result::Result<T, E>;
-
-pub trait RngProvider {
-    fn next(&mut self, max: i32) -> i32;
+pub struct ExpressionParser {
+    bounded_expression: Regex,
+    modifier_expression: Regex,
+    reroll_expression: Regex,
+    explode_expression: Regex,
 }
 
-#[derive(Clone, Debug)]
-pub struct CompoundExpression {
-    expressions: Vec<Expression>,
-}
-
-impl CompoundExpression {
-    pub fn realize(&self, provider: &mut impl RngProvider) -> RealizedCompoundExpression {
-        let mut sum = 0;
-        let realized_expressions = self
-            .expressions
-            .iter()
-            .map(|x| {
-                let realized = x.realize(provider);
-                sum += realized.realized;
-                realized
-            })
-            .collect();
-
-        RealizedCompoundExpression {
-            sum,
-            realized_expressions,
+impl ExpressionParser {
+    pub fn new() -> Self {
+        ExpressionParser {
+            bounded_expression: Regex::new(r#"^([Aa]|[Ss])?(\d+d)?(\d+)"#).unwrap(),
+            modifier_expression: Regex::new(r#"([+-]\d+)"#).unwrap(),
+            reroll_expression: Regex::new(r#"r(\d+)?"#).unwrap(),
+            explode_expression: Regex::new(r#"!(\d+)?"#).unwrap(),
         }
     }
-}
 
-impl FromStr for CompoundExpression {
-    type Err = Error;
+    pub fn parse(&self, expr: &str) -> Result<Expression> {
+        let mut expression = Expression::default();
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let expressions = parser::parse(s)?;
-        Ok(Self { expressions })
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RealizedCompoundExpression {
-    sum: i32,
-    realized_expressions: Vec<RealizedExpression>,
-}
-
-impl RealizedCompoundExpression {
-    pub fn sum(&self) -> i32 {
-        self.sum
-    }
-
-    pub fn results(&self) -> slice::Iter<RealizedExpression> {
-        self.realized_expressions.iter()
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct Expression {
-    count: u32,
-    value: Value,
-    invert: bool,
-    advantage: bool,
-    disadvantage: bool,
-    reroll: Option<i32>,
-    explode: Option<i32>,
-}
-
-impl Expression {
-    fn apply_state(&mut self, s: &str, state: &State, current_idx: usize) -> Result<()> {
-        let expr = &s[state.idx()..current_idx];
-
-        match state {
-            State::Bang { .. } => {
-                let threshold = if expr.is_empty() {
-                    self.max()
-                } else {
-                    expr.parse().map_err(|e| Error::parse_integer(e, expr))?
-                };
-                self.explode = Some(threshold);
-            }
-
-            State::Base { .. } => {
-                if expr.is_empty() {
-                    return Ok(());
+        match self.bounded_expression.captures(expr) {
+            Some(captures) => {
+                if let Some(group) = captures.get(1) {
+                    expression.advantage = Some(
+                        if group.as_str().as_bytes()[0].to_ascii_lowercase() == b'a' {
+                            Advantage::Advantage
+                        } else {
+                            Advantage::Disadvantage
+                        },
+                    );
                 }
 
-                let ExpressionPair { count, value } = parser::parse_expression(expr)?;
-                self.count = count;
-                self.value = Value::Fixed(value);
-            }
-
-            State::Bounded { .. } => {
-                if expr.is_empty() {
-                    return Ok(());
+                if let Some(group) = captures.get(2) {
+                    let subexpr = group.as_str();
+                    let subexpr = &subexpr[..subexpr.len() - 1];
+                    expression.count = subexpr
+                        .parse()
+                        .map_err(|e| Error::BadInteger(subexpr.into(), e))?;
+                } else {
+                    expression.count = 1;
                 }
 
-                let ExpressionPair { count, value } = parser::parse_expression(expr)?;
-                self.count = count;
-                self.value = Value::Bounded(value);
+                let max = captures
+                    .get(3)
+                    .ok_or_else(|| Error::BadExpression(expr.into()))?
+                    .as_str();
+                expression.max = max.parse().map_err(|e| Error::BadInteger(max.into(), e))?;
             }
-
-            State::Reroll { .. } => {
-                let threshold = if expr.is_empty() {
-                    1
-                } else {
-                    expr.parse().map_err(|e| Error::parse_integer(e, expr))?
-                };
-                self.reroll = Some(threshold);
-            }
+            None => return Err(Error::BadExpression(expr.into())),
         }
 
-        Ok(())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
-    fn realize(&self, provider: &mut impl RngProvider) -> RealizedExpression {
-        let max = match self.value {
-            Value::Bounded(max) => max,
-            Value::Fixed(n) => return RealizedExpression::fixed(n),
-        };
-
-        let mut total = 0;
-        for _ in 0..self.count {
-            total += self.roll_with_rerolls_and_explosions(max, provider);
+        if let Some(text) = self.modifier_expression.find(expr) {
+            expression.modifier = text
+                .as_str()
+                .parse()
+                .map_err(|e| Error::BadInteger(text.as_str().into(), e))?;
         }
 
-        if self.invert {
-            RealizedExpression {
-                realized: -total,
-                max: -(self.count as i32),
-                min: -(self.count as i32 * max),
-            }
-        } else {
-            RealizedExpression {
-                realized: total,
-                max: self.count as i32 * max,
-                min: self.count as i32,
-            }
-        }
-    }
+        expression.reroll = parse_threshold_token(expr, &self.reroll_expression, 1)?.map(Reroll);
+        expression.explode =
+            parse_threshold_token(expr, &self.explode_expression, expression.max)?.map(Explode);
 
-    fn roll_with_rerolls_and_explosions(&self, max: i32, provider: &mut impl RngProvider) -> i32 {
-        let mut total = 0;
-        loop {
-            let result = self.apply_advantage_and_disadvantage(max, provider);
-
-            if self.explode.map(|x| result >= x).unwrap_or_default() {
-                total += result;
-                continue;
-            }
-
-            if self.reroll.map(|x| x >= result).unwrap_or_default() {
-                continue;
-            }
-
-            return total + result;
-        }
-    }
-
-    fn apply_advantage_and_disadvantage(&self, max: i32, provider: &mut impl RngProvider) -> i32 {
-        match (self.advantage, self.disadvantage) {
-            (true, false) => {
-                let left = provider.next(max);
-                let right = provider.next(max);
-                cmp::max(left, right)
-            }
-            (false, true) => {
-                let left = provider.next(max);
-                let right = provider.next(max);
-                cmp::min(left, right)
-            }
-            _ => provider.next(max),
-        }
-    }
-
-    fn max(&self) -> i32 {
-        match self.value {
-            Value::Fixed(n) | Value::Bounded(n) => n,
-        }
+        Ok(expression)
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RealizedExpression {
-    pub min: i32,
-    pub max: i32,
-    pub realized: i32,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Expression {
+    count: i32,
+    max: i32,
+    modifier: i32,
+    advantage: Option<Advantage>,
+    reroll: Option<Reroll>,
+    explode: Option<Explode>,
 }
 
-impl RealizedExpression {
-    fn fixed(n: i32) -> Self {
-        Self {
-            min: n,
-            max: n,
-            realized: n,
-        }
-    }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Advantage {
+    Advantage,
+    Disadvantage,
 }
 
-struct ExpressionPair {
-    count: u32,
-    value: i32,
-}
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Reroll(i32);
 
-#[derive(Copy, Clone, Debug)]
-enum Value {
-    Fixed(i32),
-    Bounded(i32),
-}
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Explode(i32);
 
-impl Default for Value {
-    fn default() -> Self {
-        Value::Fixed(0)
+fn parse_threshold_token(expr: &str, pattern: &Regex, default: i32) -> Result<Option<i32>> {
+    match pattern.captures(expr) {
+        Some(captures) => match captures.get(1).map(|x| x.as_str()) {
+            Some(text) => Ok(Some(
+                text.parse()
+                    .map_err(|e| Error::BadInteger(text.into(), e))?,
+            )),
+            None => Ok(Some(default)),
+        },
+        None => Ok(None),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
+    use crate::{Advantage, Explode, Expression, ExpressionParser, Reroll};
 
-    use crate::{CompoundExpression, RngProvider};
-
-    struct MockRngProvider<I> {
-        source: I,
+    #[test]
+    fn bounded_expression() {
+        let expression = parse("2d6");
+        assert_eq!(count_max(2, 6), expression);
     }
 
-    impl<I> MockRngProvider<I>
-    where
-        I: Iterator<Item = i32>,
-    {
-        fn new(source: I) -> Self {
-            Self { source }
+    #[test]
+    fn leading_bounded_expression() {
+        let expression = parse("20");
+        assert_eq!(count_max(1, 20), expression);
+    }
+
+    #[test]
+    fn bounded_expression_with_reroll() {
+        let actual = parse("2d6r");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            reroll: Some(Reroll(1)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_reroll_2() {
+        let actual = parse("2d6r2");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            reroll: Some(Reroll(2)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_explode() {
+        let actual = parse("2d6!");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            explode: Some(Explode(6)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_explode_5() {
+        let actual = parse("2d6!5");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            explode: Some(Explode(5)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_reroll_and_explode() {
+        let actual = parse("2d6r!");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            reroll: Some(Reroll(1)),
+            explode: Some(Explode(6)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_reroll_and_explode_non_default_thresholds() {
+        let actual = parse("2d6r2!5");
+        let expected = Expression {
+            count: 2,
+            max: 6,
+            reroll: Some(Reroll(2)),
+            explode: Some(Explode(5)),
+            ..Default::default()
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_advantage() {
+        let a = parse("a20");
+        let b = parse("a1d20");
+
+        let expected = Expression {
+            count: 1,
+            max: 20,
+            advantage: Some(Advantage::Advantage),
+            ..Default::default()
+        };
+
+        assert_eq!(a, expected);
+        assert_eq!(b, expected);
+    }
+
+    #[test]
+    fn bounded_expression_with_disadvantage() {
+        let a = parse("s20");
+        let b = parse("s1d20");
+
+        let expected = Expression {
+            count: 1,
+            max: 20,
+            advantage: Some(Advantage::Disadvantage),
+            ..Default::default()
+        };
+
+        assert_eq!(a, expected);
+        assert_eq!(b, expected);
+    }
+
+    fn parse(s: &str) -> Expression {
+        ExpressionParser::new().parse(s).unwrap()
+    }
+
+    fn count_max(count: i32, max: i32) -> Expression {
+        Expression {
+            count,
+            max,
+            ..Default::default()
         }
-    }
-
-    impl<I> RngProvider for MockRngProvider<I>
-    where
-        I: Iterator<Item = i32>,
-    {
-        fn next(&mut self, _: i32) -> i32 {
-            self.source.next().unwrap()
-        }
-    }
-
-    #[test]
-    fn can_reroll() {
-        let mut provider = MockRngProvider::new([6, 1, 5].iter().cloned().cycle());
-        let expression: CompoundExpression = dbg!("2d6r".parse().unwrap());
-        let results = dbg!(expression.realize(&mut provider));
-        assert_eq!(11, results.sum);
-    }
-
-    #[test]
-    fn can_reroll_2() {
-        let mut provider = MockRngProvider::new([6, 2, 5].iter().cloned().cycle());
-        let expression: CompoundExpression = dbg!("2d6r2".parse().unwrap());
-        let results = dbg!(expression.realize(&mut provider));
-        assert_eq!(11, results.sum);
-    }
-
-    #[test]
-    fn can_explode() {
-        let mut provider = MockRngProvider::new([6, 2, 5].iter().cloned().cycle());
-        let expression: CompoundExpression = dbg!("2d6!".parse().unwrap());
-        let results = dbg!(expression.realize(&mut provider));
-        assert_eq!(13, results.sum);
-    }
-
-    #[test]
-    fn can_explode_2() {
-        let mut provider = MockRngProvider::new([6, 2, 5, 4].iter().cloned().cycle());
-        let expression: CompoundExpression = dbg!("2d6!5".parse().unwrap());
-        let results = dbg!(expression.realize(&mut provider));
-        assert_eq!(17, results.sum);
-    }
-
-    #[test]
-    fn can_parse_simple_dice_expr() {
-        let _: CompoundExpression = dbg!("d6".parse().unwrap());
-    }
-
-    #[test]
-    fn can_parse_bang_or_reroll_then_dice() {
-        let mut provider = MockRngProvider::new(iter::repeat(5));
-        let expression: CompoundExpression = dbg!("1d6rd10".parse().unwrap());
-        let results = dbg!(expression.realize(&mut provider));
-        assert_eq!(10, results.sum);
     }
 }
