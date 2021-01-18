@@ -1,6 +1,6 @@
 [package]
 name = "expr"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["J/A <archer884@gmail.com>"]
 edition = "2018"
 
@@ -8,5 +8,6 @@ edition = "2018"
 
 [dependencies]
 regex = "1.4.3"
+serde = { version = "1.0.119", features = ["derive"] }
 smallvec = "1.6.1"
 thiserror = "1.0.23"

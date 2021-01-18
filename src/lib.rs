@@ -4,6 +4,7 @@ mod error;
 
 pub use error::Error;
 use regex::Regex;
+use serde::{Serialize, Deserialize};
 use smallvec::SmallVec;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -78,7 +79,7 @@ impl Default for ExpressionParser {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Expression {
     count: i32,
     max: i32,
@@ -102,7 +103,7 @@ impl Expression {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Advantage {
     Advantage,
     Disadvantage,
@@ -115,7 +116,7 @@ impl Default for Advantage {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reroll(i32);
 
 impl Reroll {
@@ -124,7 +125,7 @@ impl Reroll {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Explode(i32);
 
 impl Explode {
