@@ -4,10 +4,10 @@ mod error;
 
 pub use error::Error;
 use regex::Regex;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct ExpressionParser {
     bounded_expression: Regex,
@@ -140,17 +140,15 @@ pub trait Realizer {
     fn realize(&mut self, expression: &Expression) -> RealizedExpression {
         let mut results = SmallVec::new();
         let mut advantage = Some(expression.advantage);
-        
+
         for _ in 0..expression.count {
             let mut value = match advantage.take().unwrap_or_default() {
-                Advantage::Advantage => cmp::max(
-                    self.next(expression.max),
-                    self.next(expression.max),
-                ),
-                Advantage::Disadvantage => cmp::min(
-                    self.next(expression.max),
-                    self.next(expression.max),
-                ),
+                Advantage::Advantage => {
+                    cmp::max(self.next(expression.max), self.next(expression.max))
+                }
+                Advantage::Disadvantage => {
+                    cmp::min(self.next(expression.max), self.next(expression.max))
+                }
                 Advantage::Normal => self.next(expression.max),
             };
 
@@ -160,16 +158,16 @@ pub trait Realizer {
                     value = self.next(expression.max);
                     continue;
                 }
-    
+
                 // Store value.
                 results.push(value);
-    
+
                 // If the value is large enough to explode, roll another and continue.
                 if expression.explode(value) {
                     value = self.next(expression.max);
                     continue;
                 }
-    
+
                 break;
             }
         }
@@ -230,7 +228,7 @@ fn parse_threshold_token(expr: &str, pattern: &Regex, default: i32) -> Result<Op
 
 #[cfg(test)]
 mod tests {
-    use crate::{Advantage, Explode, Expression, ExpressionParser, Reroll, Realizer};
+    use crate::{Advantage, Explode, Expression, ExpressionParser, Realizer, Reroll};
 
     #[test]
     fn bounded_expression() {
@@ -365,7 +363,7 @@ mod tests {
 
     #[test]
     fn realize_bounded_expression() {
-        let mut realizer = MockRealizer::new(vec![2,3]);
+        let mut realizer = MockRealizer::new(vec![2, 3]);
         let expression = parse("2d6");
         assert_eq!(5, realizer.realize(&expression).sum());
     }
@@ -424,7 +422,7 @@ mod tests {
         let expression = parse("s2d6r!5");
         assert_eq!(5, realizer.realize(&expression).sum());
     }
-    
+
     fn parse(s: &str) -> Expression {
         ExpressionParser::new().parse(s).unwrap()
     }
@@ -438,12 +436,14 @@ mod tests {
     }
 
     struct MockRealizer<T> {
-        source: T
+        source: T,
     }
 
     impl<T> MockRealizer<T> {
         fn new(source: impl IntoIterator<IntoIter = T>) -> Self {
-            Self { source: source.into_iter() }
+            Self {
+                source: source.into_iter(),
+            }
         }
     }
 
