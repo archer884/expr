@@ -101,6 +101,10 @@ impl Expression {
             .map(|x| x.should_explode(value))
             .unwrap_or_default()
     }
+
+    pub fn average_result(&self) -> f64 {
+        (1 + self.max + self.modifier * 2) as f64 / 2.0
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
