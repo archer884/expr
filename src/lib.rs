@@ -208,6 +208,10 @@ impl RealizedExpression {
             x => (Highlight::Normal, x),
         })
     }
+
+    pub fn is_critical(&self) -> bool {
+        self.results.len() == 1 && self.sum() == self.max + self.modifier
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
