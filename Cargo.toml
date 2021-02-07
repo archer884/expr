@@ -8,6 +8,6 @@ edition = "2018"
 
 [dependencies]
 regex = "1.4.3"
-serde = { version = "1.0.119", features = ["derive"] }
+serde = { version = "1.0.123", features = ["derive"] }
 smallvec = "1.6.1"
 thiserror = "1.0.23"
