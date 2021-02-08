@@ -1,5 +1,5 @@
-use std::num::ParseIntError;
 use std::io;
+use std::num::ParseIntError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
