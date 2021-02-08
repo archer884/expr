@@ -105,6 +105,10 @@ impl Expression {
     pub fn average_result(&self) -> f64 {
         ((1 + self.max) * self.count + self.modifier * 2) as f64 / 2.0
     }
+
+    pub fn num_sides(&self) -> i32 {
+        self.max
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
